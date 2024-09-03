@@ -71,7 +71,7 @@ class LLMAgentBase():
     """
 
     def __init__(self, output_fields: list, agent_name: str,
-                 role='helpful assistant', model='gemma2:27b', temperature=0.5) -> None:
+                 role='helpful assistant', model='gemma2', temperature=0.5) -> None:
         self.output_fields = output_fields
         self.agent_name = agent_name
 
@@ -228,7 +228,7 @@ if __name__ == "__main__":
     parser.add_argument('--model',
                         type=str,
                         default='llama3.1',
-                        choices=['mistral-nemo', 'gemma2:27b', 'llama3.1'])
+                        choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
     args = parser.parse_args()
 

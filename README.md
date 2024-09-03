@@ -166,7 +166,7 @@ Here is an example of how to define and run a benchmark:
        parser = argparse.ArgumentParser()
        parser.add_argument('--val_data_path', type=str, default='sampled_arc_val_data.pkl')
        parser.add_argument('--n_generation', type=int, default=25)
-       parser.add_argument('--model', type=str, default='llama3.1', choices=['mistral-nemo', 'gemma2:27b', 'llama3.1'])
+       parser.add_argument('--model', type=str, default='llama3.1', choices=['mistral-nemo', 'gemma2', 'llama3.1'])
        args = parser.parse_args()
 
        # Modify save_dir and expr_name to include the model name
