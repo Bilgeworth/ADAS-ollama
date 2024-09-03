@@ -14,7 +14,10 @@ from tqdm import tqdm
 
 from mmlu_prompt import get_init_archive, get_prompt, get_reflexion_prompt
 
-client = openai.OpenAI()
+client = openai.OpenAI(
+    base_url = 'http://localhost:11434/v1',
+    api_key='ollama', # required, but unused
+)
 
 from utils import format_multichoice_question, random_id, bootstrap_confidence_interval
 
@@ -375,8 +378,8 @@ if __name__ == "__main__":
     parser.add_argument('--debug_max', type=int, default=3)
     parser.add_argument('--model',
                         type=str,
-                        default='gpt-4o-2024-05-13',
-                        choices=['gpt-4-turbo-2024-04-09', 'gpt-3.5-turbo-0125', 'gpt-4o-2024-05-13'])
+                        default='llama3.1',
+                        choices=['gpt-4-turbo-2024-04-09', 'gpt-3.5-turbo-0125', 'llama3.1'])
 
     args = parser.parse_args()
     # search

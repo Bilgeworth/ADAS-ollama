@@ -238,7 +238,10 @@ import openai
 import backoff
 
 # Initialize the OpenAI client
-client = openai.OpenAI()
+client = openai.OpenAI(
+    base_url = 'http://localhost:11434/v1',
+    api_key='ollama', # required, but unused
+)
 
 # Named tuple for holding information
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
