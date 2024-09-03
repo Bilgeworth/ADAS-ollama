@@ -162,3 +162,6 @@ cython_debug/
 .idea/
 sampled_arc_val_data.pkl
 sampled_arc_test_data.pkl
+
+results/*
+bak/
