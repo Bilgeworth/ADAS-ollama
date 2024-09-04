@@ -199,7 +199,7 @@ def search(args):
             msg_list.append({"role": "user", "content": Reflexion_prompt_2})
             next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
         except Exception as e:
-            print("During LLM generate new solution:")
+            print("Error while LLM was generating a new solution:")
             print(e)
             n -= 1
             continue
@@ -219,7 +219,7 @@ def search(args):
                 try:
                     next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
                 except Exception as e:
-                    print("During LLM generate new solution:")
+                    print("Error while LLM was generating a new solution:")
                     print(e)
                     continue
                 continue

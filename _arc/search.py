@@ -291,7 +291,7 @@ def search(args):
             msg_list.append({"role": "user", "content": Reflexion_prompt_2})
             next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
         except Exception as e:
-            print("During LLM generate new solution:")
+            print("Error while LLM was generating a new solution:")
             print(e)
             continue
 
@@ -310,7 +310,7 @@ def search(args):
                 try:
                     next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
                 except Exception as e:
-                    print("During LLM generate new solution:")
+                    print("Error while LLM was generating a new solution:")
                     print(e)
                     continue
                 continue
@@ -423,8 +423,8 @@ def evaluate_forward_fn(args, forward_str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--val_data_path', type=str, default='sampled_arc_val_data.pkl')
-    parser.add_argument('--test_data_path', type=str, default='sampled_arc_test_data.pkl')
+    parser.add_argument('--val_data_path', type=str, default='dataset/sampled_arc_val_data.pkl')
+    parser.add_argument('--test_data_path', type=str, default='dataset/sampled_arc_test_data.pkl')
     parser.add_argument('--n_repreat', type=int, default=5)
     parser.add_argument('--multiprocessing', action='store_true', default=True)
     parser.add_argument('--max_workers', type=int, default=32)
