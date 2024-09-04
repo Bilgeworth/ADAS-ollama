@@ -39,11 +39,11 @@ validation_entries = sampled_entries[:20]
 test_entries = sampled_entries[20:]
 
 # Save validation entries to a pickle file
-with open('sampled_arc_val_data.pkl', 'wb') as val_file:
+with open('dataset/sampled_arc_val_data.pkl', 'wb') as val_file:
     pickle.dump(validation_entries, val_file)
 
 # Save test entries to a pickle file
-with open('sampled_arc_test_data.pkl', 'wb') as test_file:
+with open('dataset/sampled_arc_test_data.pkl', 'wb') as test_file:
     pickle.dump(test_entries, test_file)
 
 # Calculate and print length statistics for the validation set
