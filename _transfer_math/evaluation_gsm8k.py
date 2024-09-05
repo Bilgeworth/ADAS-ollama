@@ -18,7 +18,7 @@ client = openai.OpenAI(
     api_key='ollama', # required, but unused
 )
 
-from gsm8k_utils import get_all_examples, random_id, bootstrap_confidence_interval, score_gsm8k
+from gsm8k_utils import get_all_examples, random_id, calculate_fitness, score_gsm8k
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
 
 FORMAT_INST = lambda request_keys: f"""Reply EXACTLY with the following JSON format.\n{str(request_keys)}\nDO NOT MISS ANY REQUEST FIELDS and ensure that your response is a well-formed JSON object!\n"""
@@ -149,8 +149,8 @@ def evaluate(args):
 
     for sol in test_entries:
         print(f"{sol['name']}")
-        acc_list = evaluate_forward_fn(args, sol['code'])
-        sol['test_fitness_gsm8k'] = bootstrap_confidence_interval(acc_list)
+        score_list = evaluate_forward_fn(args, sol['code'])
+        sol['test_fitness_gsm8k'] = calculate_fitness(score_list)
 
     # Step 5: Save the test entries
     with open(eval_file_path, 'w') as json_file:
@@ -194,7 +194,7 @@ def evaluate_forward_fn(args, forward_str):
 
     agentSystem = AgentSystem()
 
-    acc_list = []
+    score_list = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(tqdm(executor.map(agentSystem.forward, task_queue), total=len(task_queue)))
 
@@ -207,12 +207,12 @@ def evaluate_forward_fn(args, forward_str):
             correct_answer = answers[q_idx]
             correct = score_gsm8k(correct_answer, extracted_answer)
         except Exception as e:
-            acc_list.append(0)
+            score_list.append(0)
             continue
 
-        acc_list.append(1 if correct else 0)
-    print(f"acc: {bootstrap_confidence_interval(acc_list)}")
-    return acc_list
+        score_list.append(1 if correct else 0)
+    print(f"acc: {calculate_fitness(score_list)}")
+    return score_list
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

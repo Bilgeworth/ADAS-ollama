@@ -1,63 +1,10 @@
 import argparse
 import copy
-import json
-import os
-import pickle
-import backoff
-import numpy as np
-import openai
-
-from tqdm import tqdm
 from collections import namedtuple
-from concurrent.futures import ThreadPoolExecutor
 
-from system_prompt_library import get_init_archive, get_prompt, get_reflexion_prompt
-from data_tools import format_data, eval_solution, bootstrap_confidence_interval, random_id, list_to_string
-
-######################################################### API Setup #########################################################
-# Initialize OpenAI client
-client = openai.OpenAI(
-    base_url = 'http://localhost:11434/v1',
-    api_key='ollama',
-)
-
-# Low temp short response, the initial response
-@backoff.on_exception(backoff.expo, openai.RateLimitError)
-def api_call_initial(
-        msg,
-        model,
-        system_message,
-        temperature=0.5
-):
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": msg},
-        ],
-        temperature=temperature, max_tokens=1024, stop=None, response_format={"type": "json_object"}
-    )
-    content = response.choices[0].message.content
-    json_dict = json.loads(content)
-    assert not json_dict is None
-    return json_dict
-
-# High temp long response, used for followup attempts
-@backoff.on_exception(backoff.expo, openai.RateLimitError)
-def api_call_followup(
-        msg_list,
-        model,
-        temperature=0.8
-):
-    response = client.chat.completions.create(
-        model=model,
-        messages=msg_list,
-        temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
-    )
-    content = response.choices[0].message.content
-    json_dict = json.loads(content)
-    assert not json_dict is None
-    return json_dict
+from data_tools import format_data, eval_solution, calculate_fitness, random_id, list_to_string
+from api import api_call_initial, api_call_followup
+from search_and_evaluate import search_and_evaluate
 
 ######################################################### Agent Setup #########################################################
 # Define a named tuple for storing information
@@ -185,9 +132,9 @@ class LLMAgentBase():
 # Agent System class
 class AgentSystem():
     # When agent system is initialized, pass its inputs into the given agent system instance
-    def __init__(self, examples, test_iuput) -> None:
+    def __init__(self, examples, test_input) -> None:
         self.examples = examples
-        self.test_iuput = test_iuput
+        self.test_input = test_input
 
     # Pass the example list into the agent system instance
     def run_examples_and_get_feedback(self, code):
@@ -253,7 +200,7 @@ class AgentSystem():
 
     # Called in the prompts, lets debaters and judges evaluate the code
     def get_test_output_from_code(self, code):
-        test_input = self.test_iuput
+        test_input = self.test_input
 
         # if the code is the Info tuple, assign the author and content to the agent system instance
         if isinstance(code, Info):
@@ -283,222 +230,9 @@ class AgentSystem():
 
         return gen_output(current_function_output)
 
-######################################################### Setup #########################################################
-# The main search function, taking the command line arguments
-def search(args):
-    # Set the file path to the save directory and the expression name
-    file_path = os.path.join(args.save_dir, f"{args.folder}_run_archive.json")
-    
-    # If the run archive already exists and is valid, load it
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as json_file:
-            archive = json.load(json_file)
-        if "generation" in archive[-1] and isinstance(archive[-1]['generation'], int):
-            start = archive[-1]['generation']
-        else:
-            start = 0
-    else:
-        archive = get_init_archive()
-        start = 0
 
-    # For each solution in the archive, evaluate it
-    for solution in archive:
-        # Skip if fitness already calculated
-        if 'fitness' in solution:
-            continue
 
-        # For the current solution, set the generation to initial
-        solution['generation'] = "initial"
-        print(f"============Initial Archive: {solution['name']}=================")
-        # Grab the code from the solution, run it through evaluate forward, stick it in accuracy list
-        try:
-            acc_list = run_and_score(args, solution["code"])
-        except Exception as e:
-            print("During evaluating initial archive:")
-            print(e)
-            continue
-        
-        # Calculate the fitness string from the accuracy list and the function grabbed from utils.py
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        solution['fitness'] = fitness_str
 
-        # save results
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, 'w') as json_file:
-            json.dump(archive, json_file, indent=4)
-
-    # For N generations, chosen by command line, reflect on on the result of the last attempt and try again
-    for n in range(start, args.n_generation):
-        print(f"============Generation {n + 1}=================")
-        # Grab the prompt from the archive, package it for the LLM
-        system_prompt, prompt = get_prompt(archive)
-        # Build the chat history to build off of
-        msg_list = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ]
-        # Try to get two responses from the LLM, the first has it attempt a solution, the second has it try again
-        try:
-            next_solution = api_call_followup(msg_list, args.model)
-
-            Reflexion_prompt_1, Reflexion_prompt_2 = get_reflexion_prompt(archive[-1] if n > 0 else None)
-            # Reflexion 1 "Where did we go wrong?"
-            msg_list.append({"role": "assistant", "content": str(next_solution)})
-            msg_list.append({"role": "user", "content": Reflexion_prompt_1})
-            next_solution = api_call_followup(msg_list, args.model)
-            # Reflexion 2 "With this in mind, try again"
-            msg_list.append({"role": "assistant", "content": str(next_solution)})
-            msg_list.append({"role": "user", "content": Reflexion_prompt_2})
-            next_solution = api_call_followup(msg_list, args.model)
-        except Exception as e:
-            print("Error while LLM was generating a new solution:")
-            print(e)
-            continue
-
-        acc_list = []
-        # Underscore means we dont use the variable value, we just want to loop debug_max times
-        for _ in range(args.debug_max):
-            # Try to evaluate the solution, if it fails, try again
-            try:
-                acc_list = run_and_score(args, next_solution["code"])
-                # If the accuracy list is all 0, raise an exception
-                if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
-                    raise Exception("All 0 accuracy")
-                break
-            except Exception as e:
-                print("During evaluation:")
-                print(e)
-                msg_list.append({"role": "assistant", "content": str(next_solution)})
-                msg_list.append({"role": "user", "content": f"Error during evaluation:\n{e}\nCarefully consider where you went wrong in your latest implementation. Using insights from previous attempts, try to debug the current code to implement the same thought. Repeat your previous thought in 'thought', and put your thinking for debugging in 'debug_thought'"})
-                try:
-                    next_solution = api_call_followup(msg_list, args.model)
-                except Exception as e:
-                    print("Error while LLM was generating a new solution:")
-                    print(e)
-                    continue
-                continue
-
-        # If there is no accuracy list after the loop, exit the for loop
-        if not acc_list:
-            continue
-
-        # Calculate the fitness string from the accuracy list and the function grabbed from utils.py, prepare to go to the next solution
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        next_solution['fitness'] = fitness_str
-        next_solution['generation'] = n + 1
-
-        # Clear out the thought and debug fields and append the next solution to the archive
-        if 'debug_thought' in next_solution:
-            del next_solution['debug_thought']
-        if 'reflection' in next_solution:
-            del next_solution['reflection']
-        archive.append(next_solution)
-
-        # save results
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, 'w') as json_file:
-            json.dump(archive, json_file, indent=4)
-
-# The evaluate functions, grades without making new solutions
-def evaluate(args):
-    # load archive
-    file_path = os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")
-    eval_file_path = str(os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")).strip(".json") + "_evaluate.json"
-    with open(file_path, 'r') as json_file:
-        archive = json.load(json_file)
-    eval_archive = []
-    if os.path.exists(eval_file_path):
-        with open(eval_file_path, 'r') as json_file:
-            eval_archive = json.load(json_file)
-
-    # Run the current solutions through the evaluation function and grade fitness
-    current_idx = 0
-    while (current_idx < len(archive)):
-        with open(file_path, 'r') as json_file:
-            archive = json.load(json_file)
-        if current_idx < len(eval_archive):
-            current_idx += 1
-            continue
-        sol = archive[current_idx]
-        print(f"current_gen: {sol['generation']}, current_idx: {current_idx}")
-        try:
-            acc_list = run_and_score(args, sol["code"])
-        except Exception as e:
-            print(e)
-            continue
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        sol['test_fitness'] = fitness_str
-        eval_archive.append(sol)
-
-        # save results
-        os.makedirs(os.path.dirname(eval_file_path), exist_ok=True)
-        with open(eval_file_path, 'w') as json_file:
-            json.dump(eval_archive, json_file, indent=4)
-
-        current_idx += 1
-
-# Evaluate the fitness of the given solution for the given task, this one is specialized to ARC, needs generalized
-def run_and_score(args, forward_str):
-    # modified from https://github.com/luchris429/DiscoPOP/blob/main/scripts/launch_evo.py
-    
-    namespace = {}
-    # Try the solution with global variables and the solutions namespace
-    exec(forward_str, globals(), namespace)
-    # If there is more than one function in the namespace, raise an exception
-    names = list(namespace.keys())
-    if len(names) != 1:
-        raise AssertionError(f"{len(names)} things in namespace. Please only provide 1")
-    # Grab the function from the namespace
-    func = namespace[names[0]]
-    if not callable(func):
-        raise AssertionError(f"{func} is not callable")
-    setattr(AgentSystem, "forward", func)
-
-    # Choose the folder to load the data from
-    if SEARCHING_MODE:
-        arc_dir = args.val_data_path
-    else:
-        arc_dir = args.test_data_path
-    print(arc_dir)
-    with open(arc_dir, 'rb') as pickle_file:
-        data_queue = pickle.load(pickle_file)
-    
-    # The data queue is grabbed from the pickle, the number of iterations is calculated, and the max workers is set 
-    print(f"Number of iterations to do: {len(data_queue) * args.n_repreat}")
-    max_workers = min(len(data_queue) * args.n_repreat, args.max_workers) if args.multiprocessing else 1
-
-    agent_task_queue = []
-    # For each data in the queue, format and add it to the agent task queue
-    for data in data_queue:
-        task_str, examples, test_input = format_data(data)
-        taskInfo = Info('task', 'User', task_str, -1)
-        agent_task_queue.extend([(AgentSystem(examples, test_input), taskInfo, data)] * args.n_repreat)
-
-    # For the agent task, call the forward function and evaluate the solution
-    def call_forward(agent_task_queue):
-        agent, taskInfo, data = agent_task_queue
-        res = agent.forward(taskInfo) # Response
-        try:
-            # If the response is an Info tuple, unpack it
-            if isinstance(res, Info):
-                res = res.content
-            # If the response is a string, evaluate it
-            if isinstance(res, str):
-                res = eval(res)
-            # Evaluate the response and get a score
-            hard_score = eval_solution(res, data, soft_eval=False)
-            return hard_score
-        except Exception as e:
-            print(e)
-            return 0
-
-    # For each agent task in the queue, call_forward
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        acc_list = list(tqdm(executor.map(call_forward, agent_task_queue), total=len(agent_task_queue)))
-    
-    # Return the accuracy list
-    print("acc:", bootstrap_confidence_interval(acc_list))
-    return acc_list
 
 # If this file is called directly from the command line, parse the arguments and run the search and evaluate functions
 if __name__ == "__main__":
@@ -515,16 +249,16 @@ if __name__ == "__main__":
     parser.add_argument('--n_generation', type=int, default=25)
     parser.add_argument('--reflect_max', type=int, default=3)
     parser.add_argument('--debug_max', type=int, default=3)
+    parser.add_argument('--mode', type=str, default='search', choices=['search', 'evaluate'])
     parser.add_argument('--model',
                         type=str,
                         default='llama3.1',
                         choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
     args = parser.parse_args()
-    # Create new solutions
-    SEARCHING_MODE = True
-    search(args)
 
-    # Test existing solutions
     SEARCHING_MODE = False
-    evaluate(args)
+    if args.mode == 'search':
+        SEARCHING_MODE = True
+
+    search_and_evaluate(args)

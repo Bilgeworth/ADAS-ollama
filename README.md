@@ -38,6 +38,8 @@ python {DOMAIN}/search.py
 
 Replace `{DOMAIN}` with the specific domain folder name {`_arc`, `_drop`, `_mgsm`, ...} to run the experiment for.
 
+If you want to retest existing solutions with a new model, i.e. llama 4 or similar comes out, you can just run the command with --mode evaluate and it will skip generating new agents, 
+
 ### Customizing Meta Agent Search for New Domains
 
 You can easily adapt the code to search for new domains. To do so, follow these steps:

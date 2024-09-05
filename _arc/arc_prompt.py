@@ -233,7 +233,7 @@ from collections import namedtuple, Union
 import numpy as np
 import json
 
-from utils import random_id, format_arc_data, eval_solution, list_to_string, bootstrap_confidence_interval
+from utils import random_id, format_arc_data, eval_solution, list_to_string, calculate_fitness
 import openai
 import backoff
 

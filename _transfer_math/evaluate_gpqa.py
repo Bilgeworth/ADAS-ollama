@@ -14,7 +14,7 @@ client = openai.OpenAI(
     api_key='ollama', # required, but unused
 )
 
-from gpqa_utils import load_questions, random_id, bootstrap_confidence_interval
+from gpqa_utils import load_questions, random_id, calculate_fitness
 
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
 
@@ -151,8 +151,8 @@ def evaluate(args):
 
     for sol in test_entries:
         print(f"{sol['name']}")
-        acc_list = evaluate_forward_fn(args, sol['code'])
-        sol['test_fitness_GPQA'] = bootstrap_confidence_interval(acc_list)
+        score_list = evaluate_forward_fn(args, sol['code'])
+        sol['test_fitness_GPQA'] = calculate_fitness(score_list)
 
     # Step 5: Save the test entries
     with open(eval_file_path, 'w') as json_file:
@@ -192,7 +192,7 @@ def evaluate_forward_fn(args, forward_str):
 
     agentSystem = AgentSystem()
 
-    acc_list = []
+    score_list = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(tqdm(executor.map(agentSystem.forward, task_queue), total=len(task_queue)))
 
@@ -223,18 +223,18 @@ def evaluate_forward_fn(args, forward_str):
                 predicted_idx = 3
             else:
                 print(f"error in q {q_idx}")
-                acc_list.append(0)
+                score_list.append(0)
                 continue
         except Exception as e:
-            acc_list.append(0)
+            score_list.append(0)
             continue
 
         if predicted_idx == val_questions[q_idx].correct_index:
-            acc_list.append(1)
+            score_list.append(1)
         else:
-            acc_list.append(0)
-    print(f"acc: {bootstrap_confidence_interval(acc_list)}")
-    return acc_list
+            score_list.append(0)
+    print(f"acc: {calculate_fitness(score_list)}")
+    return score_list
 
 
 if __name__ == "__main__":

@@ -410,15 +410,15 @@ Put your new reflection thinking in "reflection". Repeat the previous "thought" 
 """
 
 # Assemble placeholder replacements into a prompt to send to the LLM
-def get_prompt(current_archive, adaptive=False):
-    archive_str = ",\n".join([json.dumps(sol) for sol in current_archive])
+def get_prompt(current_archive):
+    archive_str = ",\n".join([json.dumps(solution) for solution in current_archive])
     archive_str = f"[{archive_str}]"
     prompt = base.replace("[ARCHIVE]", archive_str)
     prompt = prompt.replace("[EXAMPLE]", json.dumps(EXAMPLE))
 
     return system_prompt, prompt
 
-# Pass the above lists to the caller
+# Initialize a new archive
 def get_init_archive():
     return [COT_code, Reflexion, LLM_debate, COT_SC, QD]
 

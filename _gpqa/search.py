@@ -17,7 +17,7 @@ client = openai.OpenAI(
     api_key='ollama', # required, but unused
 )
 
-from utils import load_questions, random_id, bootstrap_confidence_interval
+from utils import load_questions, random_id, calculate_fitness
 
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
 
@@ -164,13 +164,13 @@ def search(args):
         solution['generation'] = "initial"
         print(f"============Initial Archive: {solution['name']}=================")
         try:
-            acc_list = evaluate_forward_fn(args, solution["code"])
+            score_list = evaluate_forward_fn(args, solution["code"])
         except Exception as e:
             print("During evaluating initial archive:")
             print(e)
             continue
 
-        fitness_str = bootstrap_confidence_interval(acc_list)
+        fitness_str = calculate_fitness(score_list)
         solution['fitness'] = fitness_str
 
         # save results
@@ -203,11 +203,11 @@ def search(args):
             n -= 1
             continue
 
-        acc_list = []
+        score_list = []
         for _ in range(args.debug_max):
             try:
-                acc_list = evaluate_forward_fn(args, next_solution["code"])
-                if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
+                score_list = evaluate_forward_fn(args, next_solution["code"])
+                if np.mean(score_list) < 0.01 and SEARCHING_MODE:
                     raise Exception("All 0 accuracy")
                 break
             except Exception as e:
@@ -222,11 +222,11 @@ def search(args):
                     print(e)
                     continue
                 continue
-        if not acc_list:
+        if not score_list:
             n -= 1
             continue
 
-        fitness_str = bootstrap_confidence_interval(acc_list)
+        fitness_str = calculate_fitness(score_list)
         next_solution['fitness'] = fitness_str
         next_solution['generation'] = n + 1
 
@@ -263,11 +263,11 @@ def evaluate(args):
         print(f"current_gen: {sol['generation']}, current_idx: {current_idx}")
         current_idx += 1
         try:
-            acc_list = evaluate_forward_fn(args, sol["code"])
+            score_list = evaluate_forward_fn(args, sol["code"])
         except Exception as e:
             print(e)
             continue
-        fitness_str = bootstrap_confidence_interval(acc_list)
+        fitness_str = calculate_fitness(score_list)
         sol['test_fitness'] = fitness_str
         eval_archive.append(sol)
 
@@ -310,7 +310,7 @@ def evaluate_forward_fn(args, forward_str):
 
     agentSystem = AgentSystem()
 
-    acc_list = []
+    score_list = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(tqdm(executor.map(agentSystem.forward, task_queue), total=len(task_queue)))
 
@@ -341,18 +341,18 @@ def evaluate_forward_fn(args, forward_str):
                 predicted_idx = 3
             else:
                 print(f"error in q {q_idx}")
-                acc_list.append(0)
+                score_list.append(0)
                 continue
         except Exception as e:
-            acc_list.append(0)
+            score_list.append(0)
             continue
 
         if predicted_idx == val_questions[q_idx].correct_index:
-            acc_list.append(1)
+            score_list.append(1)
         else:
-            acc_list.append(0)
-    print(f"acc: {bootstrap_confidence_interval(acc_list)}")
-    return acc_list
+            score_list.append(0)
+    print(f"acc: {calculate_fitness(score_list)}")
+    return score_list
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ def random_id(length=4):
     return random_id
 
 
-def bootstrap_confidence_interval(data, num_bootstrap_samples=100000, confidence_level=0.95):
+def calculate_fitness(data, num_bootstrap_samples=100000, confidence_level=0.95):
     """
     Calculate the bootstrap confidence interval for the mean of 1D accuracy data.
     Also returns the median of the bootstrap means.
