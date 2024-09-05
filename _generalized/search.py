@@ -337,7 +337,7 @@ def search(args):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
-        # Try to get two responses from the LLM, the first has it identify issues with the solution, the second has it try again
+        # Try to get two responses from the LLM, the first has it attempt a solution, the second has it try again
         try:
             next_solution = api_call_followup(msg_list, args.model)
 
