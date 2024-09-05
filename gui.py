@@ -170,8 +170,9 @@ class SearchGUI(QMainWindow):
     def update_command_preview(self):
         args = self.get_argument_values()
         script_path = 'search.py'
-        if self.select_folder:
-            script_path = os.path.join(self.select_folder, 'search.py')
+        folder = self.folder_label.text().replace("Selected Folder: ", "")
+        if folder:
+            script_path = os.path.join(folder, 'search.py')
         
         command = [sys.executable, script_path]
         for key, value in args.items():
