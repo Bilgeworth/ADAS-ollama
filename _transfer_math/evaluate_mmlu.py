@@ -25,7 +25,7 @@ ROLE_DESC = lambda role: f"You are a {role}."
 SYSTEM_MSG = ""
 
 PRINT_LLM_DEBUG = False
-SEARCHING_MODE = True
+generating_new_agents = True
 
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
@@ -52,13 +52,13 @@ def get_json_response_from_gpt(
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
 def get_json_response_from_gpt_reflect(
-        msg_list,
+        chat_log,
         model,
         temperature=0.8
 ):
     response = client.chat.completions.create(
         model=model,
-        messages=msg_list,
+        messages=chat_log,
         temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content
@@ -116,7 +116,7 @@ class LLMAgentBase():
             assert len(response_json) == len(self.output_fields), "not returning enough fields"
         except Exception as e:
             # print(e)
-            if "maximum context length" in str(e) and SEARCHING_MODE:
+            if "maximum context length" in str(e) and generating_new_agents:
                 raise AssertionError("The context is too long. Please try to design the agent to have shorter context.")
             # try to fill in the missing field
             for key in self.output_fields:
@@ -143,8 +143,8 @@ class AgentSystem():
         pass
 
 
-def evaluate(args):
-    eval_file_path = args.eval_file_path
+def evaluate(cmd_line_args):
+    eval_file_path = cmd_line_args.eval_file_path
     if os.path.exists(eval_file_path):
         with open(eval_file_path, 'r') as json_file:
             test_entries = json.load(json_file)
@@ -153,7 +153,7 @@ def evaluate(args):
 
     for sol in test_entries:
         print(f"{sol['name']}")
-        score_list = evaluate_forward_fn(args, sol['code'])
+        score_list = evaluate_forward_fn(cmd_line_args, sol['code'])
         sol['test_fitness_GPQA'] = calculate_fitness(score_list)
 
     # Step 5: Save the test entries
@@ -161,11 +161,11 @@ def evaluate(args):
         json.dump(test_entries, json_file, indent=4)
 
 
-def evaluate_forward_fn(args, forward_str):
+def evaluate_forward_fn(cmd_line_args, code_being_judged):
     # dynamically define forward()
     # modified from https://github.com/luchris429/DiscoPOP/blob/main/scripts/launch_evo.py
     namespace = {}
-    exec(forward_str, globals(), namespace)
+    exec(code_being_judged, globals(), namespace)
     names = list(namespace.keys())
     if len(names) != 1:
         raise AssertionError(f"{len(names)} things in namespace. Please only provide 1")
@@ -176,21 +176,21 @@ def evaluate_forward_fn(args, forward_str):
 
     LETTER_TO_INDEX = {'A': 0, 'B': 1, 'C': 2, 'D': 3}
     # set seed 0 for valid set
-    df = pandas.read_csv(args.data_filename)
-    random.seed(args.shuffle_seed)
+    df = pandas.read_csv(cmd_line_args.data_filename)
+    random.seed(cmd_line_args.shuffle_seed)
     examples = [row.to_dict() for _, row in df.iterrows()]
     random.shuffle(examples)
 
-    if SEARCHING_MODE:
-        examples = examples[:args.valid_size] * args.n_repreat
+    if generating_new_agents:
+        examples = examples[:cmd_line_args.valid_size] * cmd_line_args.n_repreat
     else:
-        examples = examples[args.valid_size:args.valid_size + args.test_size] * args.n_repreat
+        examples = examples[cmd_line_args.valid_size:cmd_line_args.valid_size + cmd_line_args.test_size] * cmd_line_args.n_repreat
 
     questions = [format_multichoice_question(example) for example in examples]
     answers = [LETTER_TO_INDEX[example['Answer']] for example in examples]
 
     print(f"problem length: {len(examples)}")
-    max_workers = min(len(examples), args.max_workers) if args.multiprocessing else 1
+    max_workers = min(len(examples), cmd_line_args.max_workers) if cmd_line_args.multiprocessing else 1
 
     task_queue = []
     for q in questions:
@@ -203,30 +203,30 @@ def evaluate_forward_fn(args, forward_str):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(tqdm(executor.map(agentSystem.forward, task_queue), total=len(task_queue)))
 
-    for q_idx, res in enumerate(results):
+    for q_idx, function_response in enumerate(results):
         try:
-            if isinstance(res, str) and res in LETTER_TO_INDEX:
-                predicted_idx = LETTER_TO_INDEX[res]
-            elif 'A)' in res:
+            if isinstance(function_response, str) and function_response in LETTER_TO_INDEX:
+                predicted_idx = LETTER_TO_INDEX[function_response]
+            elif 'A)' in function_response:
                 predicted_idx = 0
-            elif 'B)' in res:
+            elif 'B)' in function_response:
                 predicted_idx = 1
-            elif 'C)' in res:
+            elif 'C)' in function_response:
                 predicted_idx = 2
-            elif 'D)' in res:
+            elif 'D)' in function_response:
                 predicted_idx = 3
-            elif isinstance(res, list):
-                try_res = res[1]
+            elif isinstance(function_response, list):
+                try_res = function_response[1]
                 predicted_idx = LETTER_TO_INDEX[try_res.content]
-            elif res.content in LETTER_TO_INDEX:
-                predicted_idx = LETTER_TO_INDEX[res.content]
-            elif 'A)' in res.content:
+            elif function_response.content in LETTER_TO_INDEX:
+                predicted_idx = LETTER_TO_INDEX[function_response.content]
+            elif 'A)' in function_response.content:
                 predicted_idx = 0
-            elif 'B)' in res.content:
+            elif 'B)' in function_response.content:
                 predicted_idx = 1
-            elif 'C)' in res.content:
+            elif 'C)' in function_response.content:
                 predicted_idx = 2
-            elif 'D)' in res.content:
+            elif 'D)' in function_response.content:
                 predicted_idx = 3
             else:
                 print(f"error in q {q_idx}")
@@ -260,7 +260,7 @@ if __name__ == "__main__":
                         default='llama3.1',
                         choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
-    args = parser.parse_args()
+    cmd_line_args = parser.parse_args()
 
-    SEARCHING_MODE = False
-    evaluate(args)
+    generating_new_agents = False
+    evaluate(cmd_line_args)

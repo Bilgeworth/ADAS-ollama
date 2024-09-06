@@ -33,13 +33,13 @@ def api_call_initial(
 # High temp long response, the followup query
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
 def api_call_followup(
-        msg_list,
+        chat_log,
         model,
         temperature=0.8
 ):
     response = client.chat.completions.create(
         model=model,
-        messages=msg_list,
+        messages=chat_log,
         temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content

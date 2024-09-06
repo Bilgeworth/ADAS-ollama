@@ -20,7 +20,7 @@ class ScoringLibrary:
         """
         Calculate a match score between expected and received data using the specified comparison type.
         
-        Args:
+        cmd_line_args:
         expected: The expected (correct) data
         received: The received (to be evaluated) data
         comparison_type: The type of comparison to perform

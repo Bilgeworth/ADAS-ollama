@@ -98,7 +98,7 @@ class SearchGUI(QMainWindow):
             ("Max Workers", "max_workers", "32", "spin"),
             ("Debug", "debug", True, "checkbox"),
             ("Save Directory", "save_dir", "results/", "text"),
-            ("Experiment Name", "expr_name", "arc_llama3.1_results", "text"),
+            ("Experiment Name", "archive_name", "arc_llama3.1_results", "text"),
             ("N Generation", "n_generation", "25", "spin"),
             ("Reflect Max", "reflect_max", "3", "spin"),
             ("Debug Max", "debug_max", "3", "spin"),
@@ -168,14 +168,14 @@ class SearchGUI(QMainWindow):
             input_field.currentTextChanged.connect(self.update_command_preview)
 
     def update_command_preview(self):
-        args = self.get_argument_values()
+        cmd_line_args = self.get_argument_values()
         script_path = 'search.py'
         folder = self.folder_label.text().replace("Selected Folder: ", "")
         if folder:
             script_path = os.path.join(folder, 'search.py')
         
         command = [sys.executable, script_path]
-        for key, value in args.items():
+        for key, value in cmd_line_args.items():
             if isinstance(value, bool):
                 if value:
                     command.append(f'--{key}')
@@ -208,24 +208,24 @@ class SearchGUI(QMainWindow):
             self.output_display.appendPlainText(f"Error running search.py: {str(e)}")
 
     def get_argument_values(self):
-        args = {}
+        cmd_line_args = {}
         for child in self.findChildren(QWidget):
             if child.objectName():
                 if isinstance(child, QLineEdit):
-                    args[child.objectName()] = child.text()
+                    cmd_line_args[child.objectName()] = child.text()
                 elif isinstance(child, QSpinBox):
-                    args[child.objectName()] = child.value()
+                    cmd_line_args[child.objectName()] = child.value()
                 elif isinstance(child, QComboBox):
-                    args[child.objectName()] = child.currentText()
+                    cmd_line_args[child.objectName()] = child.currentText()
                 elif isinstance(child, QCheckBox):
-                    args[child.objectName()] = child.isChecked()
-        return args
+                    cmd_line_args[child.objectName()] = child.isChecked()
+        return cmd_line_args
 
     def run_evaluate(self):
-        args = self.get_argument_values()
+        cmd_line_args = self.get_argument_values()
         self.output_display.clear()
         self.output_display.appendPlainText("Running evaluate with arguments:")
-        self.output_display.appendPlainText(str(args))
+        self.output_display.appendPlainText(str(cmd_line_args))
         self.output_display.appendPlainText("\nEvaluation output:")
 
         folder = self.folder_label.text().replace("Selected Folder: ", "")
@@ -237,15 +237,15 @@ class SearchGUI(QMainWindow):
         output = io.StringIO()
         with redirect_stdout(output):
             try:
-                subprocess.run([sys.executable, search_script_path] + self.format_args(args), check=True)
+                subprocess.run([sys.executable, search_script_path] + self.format_args(cmd_line_args), check=True)
             except subprocess.CalledProcessError as e:
                 print(f"Error running search.py: {e}")
 
         self.output_display.appendPlainText(output.getvalue())
 
-    def format_args(self, args):
+    def format_args(self, cmd_line_args):
         formatted_args = []
-        for key, value in args.items():
+        for key, value in cmd_line_args.items():
             if isinstance(value, bool):
                 if value:
                     formatted_args.append(f"--{key}")

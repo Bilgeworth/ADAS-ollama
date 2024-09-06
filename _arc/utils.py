@@ -55,7 +55,7 @@ def format_arc_data(arc_data, direct=False):
     return task_str, arc_data['train'], arc_data['test'][0]['input']
 
 
-def get_percentage_match(arr1, arr2):
+def compare_to_expected(arr1, arr2):
     # arr1 is solution
     if not arr2:
         return 0
@@ -94,7 +94,7 @@ def eval_algo(solve_fn, arc_data, soft_eval=False):
                 continue
         # Check if correct output
         if soft_eval:
-            score = get_percentage_match(output, gen_output)
+            score = compare_to_expected(output, gen_output)
         else:
             score = 1 if output == gen_output else 0
         scores.append(score)
@@ -107,7 +107,7 @@ def eval_solution(output, arc_data, soft_eval=False):
 
     solution = arc_data['test'][0]['output']
     if soft_eval:
-        score = get_percentage_match(solution, output)
+        score = compare_to_expected(solution, output)
     else:
         score = 1 if output == solution else 0
     return score
@@ -118,7 +118,7 @@ def calculate_fitness(data, num_bootstrap_samples=100000, confidence_level=0.95)
     Calculate the bootstrap confidence interval for the mean of 1D accuracy data.
     Also returns the median of the bootstrap means.
     
-    Args:
+    cmd_line_args:
     - data (list or array of float): 1D list or array of data points.
     - num_bootstrap_samples (int): Number of bootstrap samples.
     - confidence_level (float): The desired confidence level (e.g., 0.95 for 95%).

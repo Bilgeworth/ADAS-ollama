@@ -33,7 +33,7 @@ COT = {
 """
 }
 
-COT_SC = {"thought": "While an LLM can arrive at the correct answer, its reasoning may vary. By repeatedly asking the same question with high temperature settings, we can generate different reasoning paths. We then combine multiple answers from these Chain-of-Thought (CoT) agents to produce a more accurate final answer through ensembling.",
+COT_split_brain = {"thought": "While an LLM can arrive at the correct answer, its reasoning may vary. By repeatedly asking the same question with high temperature settings, we can generate different reasoning paths. We then combine multiple answers from these Chain-of-Thought (CoT) agents to produce a more accurate final answer through ensembling.",
           "name": "Self-Consistency with Chain-of-Thought",
           "code": """def forward(self, taskInfo):
     # Instruction for step-by-step reasoning
@@ -59,9 +59,9 @@ COT_SC = {"thought": "While an LLM can arrive at the correct answer, its reasoni
 """
           }
 
-Reflexion = {
+self_reflection = {
     "thought": "To enhance its performance, an LLM can iteratively improve its answer based on feedback. By reflecting on its previous attempts and incorporating feedback, the model can refine its reasoning and provide a more accurate solution.",
-    "name": "Self-Refine (Reflexion)",
+    "name": "Self-Refine (self_reflection)",
     "code": """def forward(self, taskInfo):
     # Instruction for initial reasoning
     cot_initial_instruction = "Please think step by step and then solve the task."
@@ -155,14 +155,14 @@ Take_a_step_back = {"thought": "Let LLM first think about the principles involve
 """
                     }
 
-QD = {"thought": "Similar to Quality-Diversity methods, let LLM generate multiple diverse interesting solutions could help. By encouraging the model to explore different reasoning paths, we can increase the chances of finding the best solution.",
+ Outside_the_box = {"thought": "Similar to Quality-Diversity methods, let LLM generate multiple diverse interesting solutions could help. By encouraging the model to explore different reasoning paths, we can increase the chances of finding the best solution.",
       "name": "Quality-Diversity",
       "code": """def forward(self, taskInfo):
     # Instruction for initial reasoning
     cot_initial_instruction = "Please think step by step and then solve the task."
 
     # Instruction for giving diverse answers
-    qd_instruction = "Given previous attempts, try to come up with another interesting way to solve the task."
+    Outside_the_box_instruction = "Given previous attempts, try to come up with another interesting way to solve the task."
     cot_agent = LLMAgentBase(['thinking', 'answer'], 'Chain-of-Thought Agent')
 
     # Instruction for final decision-making based on collected reasoning and answers
@@ -184,7 +184,7 @@ QD = {"thought": "Similar to Quality-Diversity methods, let LLM generate multipl
         cot_inputs.extend([thinking, answer])
 
         # Generate another interesting answer
-        thinking, answer = cot_agent(cot_inputs, qd_instruction, i + 1)
+        thinking, answer = cot_agent(cot_inputs, Outside_the_box_instruction, i + 1)
         possible_answers.extend([thinking, answer])
 
     # Make the final decision based on all generated answers
@@ -275,7 +275,7 @@ def get_json_response_from_gpt(msg, model, system_message, temperature=0.5):
     \"""
     Function to get JSON response from GPT model.
     
-    Args:
+    cmd_line_args:
     - msg (str): The user message.
     - model (str): The model to use.
     - system_message (str): The system message.
@@ -324,7 +324,7 @@ class LLMAgentBase:
         \"""
         Generates a prompt for the LLM.
         
-        Args:
+        cmd_line_args:
         - input_infos (list): List of input information.
         - instruction (str): Instruction for the task.
         
@@ -380,7 +380,7 @@ class LLMAgentBase:
         \"""
         Queries the LLM with provided input information and instruction.
         
-        Args:
+        cmd_line_args:
         - input_infos (list): List of input information.
         - instruction (str): Instruction for the task.
         - iteration_idx (int): Iteration index for the task.
@@ -414,7 +414,7 @@ class AgentArchitecture:
         \"""
         Placeholder method for processing task information.
         
-        Args:
+        cmd_line_args:
         - taskInfo (Info): Task information.
         
         Returns:
@@ -503,7 +503,7 @@ Using the knowledge learned from the archive and the inspiration from academic l
 THINK OUTSIDE THE BOX.
 """
 
-Reflexion_prompt_1 = f""""[EXAMPLE]Carefully review the proposed new architecture and reflect on the following points:"
+review_and_correct = f""""[EXAMPLE]Carefully review the proposed new architecture and reflect on the following points:"
 
 1. **Interestingness**: Assess whether your proposed architecture is interesting or innovative compared to existing methods in the archive. If you determine that the proposed architecture is not interesting, suggest a new architecture that addresses these shortcomings. 
 - Make sure to check the difference between the proposed architecture and previous attempts.
@@ -531,14 +531,14 @@ Your response should be organized as follows:
 "code": Provide the corrected code or an improved implementation. Make sure you actually implement your fix and improvement in this code.
 """
 
-Reflexion_prompt_2 = """Using the tips in "## WRONG Implementation examples" section, revise the code further.
+correct_using_examples = """Using the tips in "## WRONG Implementation examples" section, revise the code further.
 Your response should be organized as follows:
 Put your new reflection thinking in "reflection". Repeat the previous "thought" and "name", and update the corrected version of the code in "code".
 """
 
 
-def get_init_archive():
-    return [COT, COT_SC, Reflexion, LLM_debate, Take_a_step_back, QD, Role_Assignment]
+def create_new_archive():
+    return [COT, COT_split_brain, self_reflection, LLM_debate, Take_a_step_back, Outside_the_box, Role_Assignment]
 
 
 def get_prompt(current_archive, adaptive=False):
@@ -550,7 +550,7 @@ def get_prompt(current_archive, adaptive=False):
     return system_prompt, prompt
 
 
-def get_reflexion_prompt(prev_example):
+def get_self_reflection_prompt(prev_example):
     prev_example_str = "Here is the previous agent you tried:\n" + json.dumps(prev_example) + "\n\n"
-    r1 = Reflexion_prompt_1.replace("[EXAMPLE]", prev_example_str) if prev_example else Reflexion_prompt_1.replace("[EXAMPLE]", "")
-    return r1, Reflexion_prompt_2
+    r1 = review_and_correct.replace("[EXAMPLE]", prev_example_str) if prev_example else review_and_correct.replace("[EXAMPLE]", "")
+    return r1, correct_using_examples

@@ -1,1 +1,18 @@
-The search.py script in each benchmark folder is designed to automate the generation and evaluation of agents for specific tasks. The script accepts several command-line arguments to customize its behavior: --val_data_path and --test_data_path specify the paths to validation and test datasets, respectively; --n_repeat sets the number of repetitions for the evaluation; --multiprocessing and --max_workers control the use of multiprocessing and the number of worker processes; --debug enables debug mode; --save_dir and --expr_name define the directory and name for saving results; --n_generation sets the number of agent generations; --reflect_max and --debug_max set limits for reflection and debugging iterations; and --model specifies the model to be used. To run the script, navigate to the desired benchmark folder and execute python search.py with the appropriate arguments, for example: python search.py --val_data_path path/to/val_data --model gemma2:27b. This will initiate the process of generating agents, evaluating their performance, and saving the results to the specified directory.
+The search.py script in each benchmark folder is designed to automate the generation and evaluation of agents for specific tasks. 
+The script accepts several command-line arguments to customize its behavior: --val_data_path and --test_data_path specify the paths to validation and test datasets, respectively; 
+--n_repeat sets the number of repetitions for the evaluation; 
+--multiprocessing and 
+--max_workers control the use of multiprocessing and the number of worker processes; 
+--debug enables debug mode; 
+--save_dir and --archive_name define the directory and name for saving results; 
+--n_generation sets the number of agent generations; 
+--reflect_max and 
+--debug_max set limits for reflection and debugging iterations; 
+and 
+--model specifies the model to be used. 
+
+To run the script, navigate to the desired benchmark folder and execute python search.py with the appropriate arguments, for example: 
+    
+    python search.py --val_data_path path/to/val_data --model gemma2:27b
+    
+This will initiate the process of generating agents, evaluating their performance, and saving the results to the specified directory.
