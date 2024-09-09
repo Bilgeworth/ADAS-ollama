@@ -165,3 +165,5 @@ sampled_arc_test_data.pkl
 
 results/*
 bak/
+gui_old.py
+adas.ico

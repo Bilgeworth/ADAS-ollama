@@ -13,195 +13,6 @@ EXAMPLE = {
 """
 }
 
-# Have the LLM list its chain of thought, and then output the final answer
-COT_code = {
-    "thought": "Directly formatting the output can be challenging. A good practice is to allow the LLM to write the code and then evaluate it to generate the output. This ensures that the output is derived from executable code, improving reliability.",
-    "name": "Chain-of-Thought",
-    "code": """def forward(self, taskInfo):
-    # Instruction for the Chain-of-Thought (CoT) approach with code generation
-    cot_instruction = "Please think step by step and then solve the task by writing the code."
-    
-    # Instantiate a new LLM agent specifically for CoT with code output
-    # To allow LLM thinking before answering, we need to set an additional output field 'thinking'.
-    cot_agent = LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent')
-    
-    # Get the CoT agent's response, which includes both thinking steps and code
-    thinking, code = cot_agent([taskInfo], cot_instruction)
-    
-    # Evaluate the generated code to get the output
-    answer = self.get_test_output_from_code(code)
-    
-    # Return the final output derived from the code execution
-    return answer
-    """
-}
-
-# Attempt 5 high temperature solutions, combining passing solutions
-COT_split_brain = {
-    "thought": "While an LLM can arrive at the correct answer, its reasoning may vary. By repeatedly asking the same question with high temperature settings, we can generate different reasoning paths. We then combine multiple answers from these Chain-of-Thought (CoT) agents to produce a more accurate final answer through ensembling. Note that we need to collect only the ones that pass the examples, preventing the context length from becoming too long.",
-    "name": "Self-Consistency with Chain-of-Thought",
-    "code": """def forward(self, taskInfo):
-    # Instruction for step-by-step reasoning and code generation
-    cot_instruction = "Please think step by step and then solve the task by writing the code."
-    N = 5  # Number of CoT agents
-    
-    # Initialize multiple CoT agents with a higher temperature for varied reasoning
-    cot_agents = [LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent', temperature=0.7) for _ in range(N)]
-
-    # Instruction for final decision-making based on collected reasoning and answers
-    final_decision_instruction = "Given all the above solutions, reason over them carefully and provide a final answer by writing the code."
-    final_decision_agent = LLMAgentBase(['thinking', 'code'], 'Final Decision Agent', temperature=0.1)
-    
-    possible_answers = []
-    
-    # Collect reasoning and answers from each CoT agent
-    for i in range(N):
-        thinking, code = cot_agents[i]([taskInfo], cot_instruction)
-        possible_answers.extend([thinking, code])
-    
-    # Make a final decision based on all collected reasoning and answers
-    thinking, code = final_decision_agent([taskInfo] + possible_answers, final_decision_instruction)
-    answer = self.get_test_output_from_code(code)
-    
-    return answer
-    """
-}
-
-# Give the LLM a loop and a feedback function it can call, tries again 3 times
-self_reflection = {
-    "thought": "To enhance its performance, an LLM can iteratively improve its answer based on feedback. After each answer, testing on the examples to provide feedback, and the LLM uses insights from previous attempts and feedback to refine its answer. It is very good practice to use `self.run_examples_and_get_feedback` to get feedback. One should consider trying to use this feedback in future agent design.",
-    "name": "Self-Refine (self_reflection)",
-    "code": """def forward(self, taskInfo):
-    # Instruction for initial reasoning and code generation
-    cot_initial_instruction = "Please think step by step and then solve the task by writing the code."
-    
-    # Instruction for reflecting on previous attempts and feedback to improve
-    cot_reflect_instruction = "Given previous attempts and feedback, carefully consider where you went wrong in your latest attempt. Using insights from previous attempts, try to solve the task better."
-    
-    # Instantiate a Chain-of-Thought (CoT) agent
-    cot_agent = LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent')
-    
-    N_max = 3  # Maximum number of attempts
-    
-    # Initial attempt
-    thinking, code = cot_agent([taskInfo], cot_initial_instruction, 0)
-    
-    # Iteratively refine the answer based on feedback
-    for i in range(N_max):
-        # Get feedback by testing the code on examples
-        feedback, correct_examples, wrong_examples = self.run_examples_and_get_feedback(code)  
-        
-        # Add feedback to the inputs for the next iteration
-        attempt = [thinking, code, feedback]
-
-        # Reflect on previous attempts and refine the answer
-        # Only consider the latest attempts to control context length. You can try to increase the N_max.
-        # The input to LLMAgentBase should be a list of Info.
-        thinking, code = cot_agent([taskInfo] + attempt, cot_reflect_instruction, i + 1)  
-
-    # Get the final answer after refinement
-    answer = self.get_test_output_from_code(code)
-    return answer
-    """
-}
-
-# Use the LLM to generate multiple solutionsm, have them debate 2 rounds, then make a final decision
-LLM_debate = {
-    "thought": "By letting different LLMs debate with each other, we can leverage their diverse perspectives to find better solutions for tasks.",
-    "name": "LLM Debate",
-    "code": """def forward(self, taskInfo):
-    # Instruction for initial reasoning and code generation
-    debate_initial_instruction = "Please think step by step and then solve the task by writing the code."
-    
-    # Instruction for debating and updating the solution based on other agents' solutions
-    debate_instruction = "Given solutions to the problem from other agents, consider their opinions as additional advice. Please think carefully and provide an updated answer by writing the code."
-    
-    # Initialize debate agents with different roles and a moderate temperature for varied reasoning
-    debate_agents = [LLMAgentBase(['thinking', 'code'], 'Debate Agent', temperature=0.6, role=role) for role in ['Puzzle Game Designer', 'Expert Logician']]
-
-    # Instruction for final decision-making based on all debates and solutions
-    final_decision_instruction = "Given all the above thinking and answers, reason over them carefully and provide a final answer by writing the code."
-    final_decision_agent = LLMAgentBase(['thinking', 'code'], 'Final Decision Agent', temperature=0.1)
-
-    max_round = 2  # Maximum number of debate rounds
-    all_results = [[] for _ in range(max_round)]
-    
-    # Perform debate rounds
-    for r in range(max_round):
-        for i in range(len(debate_agents)):
-            if r == 0:
-                thinking, code = debate_agents[i]([taskInfo], debate_initial_instruction)
-                answer = self.get_test_output_from_code(code)
-            else:
-                input_infos = [taskInfo] + all_results[r-1]
-                thinking, code = debate_agents[i](input_infos, debate_instruction)
-                answer = self.get_test_output_from_code(code)
-            all_results[r].extend([thinking, answer])
-    
-    # Make the final decision based on all debate results and solutions
-    thinking, code = final_decision_agent([taskInfo] + all_results[max_round-1], final_decision_instruction)
-    answer = self.get_test_output_from_code(code)
-    return answer
-    """
-}
-
-# Have the LLM generate a solution, then another trying to be different from previous, so on so forth 3 times, grab 2 best solutions based on fitness, then let agents debate and pick between them
-Outside_the_box = {
-    "thought": "Similar to Quality-Diversity methods, allowing the LLM to generate multiple diverse and interesting solutions could be beneficial.",
-    "name": "Quality-Diversity",
-    "code": """def forward(self, taskInfo):
-    # Instruction for initial reasoning and code generation
-    cot_initial_instruction = "Please think step by step and then solve the task by writing the code."
-    
-    # Instruction for generating another interesting way to solve the task based on previous attempts
-    cot_QD_instruction = "Given previous attempts, try to come up with another interesting way to solve the task by writing the code."
-    
-    # Initialize the Chain-of-Thought (CoT) agent
-    cot_agent = LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent')
-
-    # Instruction for final decision-making based on all solutions
-    final_decision_instruction = "Given all the above thinking and answers, reason over them carefully and provide a final answer by writing the code."
-    final_decision_agent = LLMAgentBase(['thinking', 'code'], 'Final Decision Agent', temperature=0.1)
-    
-    N_max = 3  # Maximum number of attempts
-    Outside_the_box_inputs = [taskInfo]  # Initialize inputs with the task information
-
-    possible_answers = []
-    
-    # Generate multiple diverse solutions
-    # Different from generating multiple answers through repeated questioning, we generate interestingly new solutions based on previous attempts
-    for i in range(N_max):
-        # Generate a solution based on the instruction (initial or Outside_the_box)
-        # Also control the context length.
-        thinking, code = cot_agent(qd_inputs[-3:], cot_initial_instruction if i == 0 else cot_QD_instruction, i)
-        # Get feedback by testing the code on examples
-        feedback, correct_examples, wrong_examples = self.run_examples_and_get_feedback(code)
-        # Add the solution to inputs for the next iteration
-        Outside_the_box_inputs.extend([thinking, code, feedback])  
-        # Collect all possible answers
-        possible_answers.append({
-            'thinking': thinking,
-            'code': code,
-            'feedback': feedback,
-            'correct_count': len(correct_examples)
-        })
-
-    # Sort the possible answers based on the number of correct examples in descending order
-    sorted_answers = sorted(possible_answers, key=lambda x: x['correct_count'], reverse=True)
-    
-    # Select the top solutions (e.g., top 2 solutions)
-    top_solutions = sorted_answers[:2]
-
-    # Prepare inputs for the final decision agent
-    final_inputs = [taskInfo] + [item for solution in top_solutions for item in [solution['thinking'], solution['code'], solution['feedback']]]
-
-    # Make the final decision based on all solutions
-    thinking, code = final_decision_agent(final_inputs, final_decision_instruction)
-    answer = self.get_test_output_from_code(code)
-    return answer
-    """
-}
-
 # The default system prompt, usually gets overwritten
 system_prompt = """You are a helpful assistant. Make sure to return in a WELL-FORMED JSON object."""
 
@@ -223,8 +34,8 @@ The code only needs to be unambiguous and applicable to the example inputs and t
 """
 
 for i, example in enumerate(example_list):
-    input_value = example[0]
-    output_value = example[1]
+    input_value = example.get("input", "")
+    output_value = example.get("output", "")
     base += f"### Example {i+1}:\ninput = {input_value}\noutput = {output_value}\n\n"
 
 base +="""
@@ -419,12 +230,201 @@ def get_prompt(current_archive):
 
     return system_prompt, prompt
 
-# Initialize a new archive
-def create_new_archive():
-    return [COT_code, self_reflection, LLM_debate, COT_split_brain, Outside_the_box]
-
 # Build a prompt to reflect on and pass it to the caller
 def get_self_reflection_prompt(prev_example):
     prev_example_str = "Here is the previous agent you tried:\n" + json.dumps(prev_example) + "\n\n"
     r1 = review_and_correct.replace("[EXAMPLE]", prev_example_str) if prev_example else review_and_correct.replace("[EXAMPLE]", "")
     return r1, correct_using_examples
+
+
+###################################################### Default Agents ###################################################################
+# Have the LLM list its chain of thought, and then output the final answer
+COT_code = {
+    "thought": "Directly formatting the output can be challenging. A good practice is to allow the LLM to write the code and then evaluate it to generate the output. This ensures that the output is derived from executable code, improving reliability.",
+    "name": "Chain-of-Thought",
+    "code": """def forward(self, taskInfo):
+    # Instruction for the Chain-of-Thought (CoT) approach with code generation
+    cot_instruction = "Please think step by step and then solve the task by writing the code."
+    
+    # Instantiate a new LLM agent specifically for CoT with code output
+    # To allow LLM thinking before answering, we need to set an additional output field 'thinking'.
+    cot_agent = LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent')
+    
+    # Get the CoT agent's response, which includes both thinking steps and code
+    thinking, code = cot_agent([taskInfo], cot_instruction)
+    
+    # Evaluate the generated code to get the output
+    answer = self.get_test_output_from_code(code)
+    
+    # Return the final output derived from the code execution
+    return answer
+    """
+}
+
+# Attempt 5 high temperature solutions, combining passing solutions
+COT_split_brain = {
+    "thought": "While an LLM can arrive at the correct answer, its reasoning may vary. By repeatedly asking the same question with high temperature settings, we can generate different reasoning paths. We then combine multiple answers from these Chain-of-Thought (CoT) agents to produce a more accurate final answer through ensembling. Note that we need to collect only the ones that pass the examples, preventing the context length from becoming too long.",
+    "name": "Self-Consistency with Chain-of-Thought",
+    "code": """def forward(self, taskInfo):
+    # Instruction for step-by-step reasoning and code generation
+    cot_instruction = "Please think step by step and then solve the task by writing the code."
+    N = 5  # Number of CoT agents
+    
+    # Initialize multiple CoT agents with a higher temperature for varied reasoning
+    cot_agents = [LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent', temperature=0.7) for _ in range(N)]
+
+    # Instruction for final decision-making based on collected reasoning and answers
+    final_decision_instruction = "Given all the above solutions, reason over them carefully and provide a final answer by writing the code."
+    final_decision_agent = LLMAgentBase(['thinking', 'code'], 'Final Decision Agent', temperature=0.1)
+    
+    possible_answers = []
+    
+    # Collect reasoning and answers from each CoT agent
+    for i in range(N):
+        thinking, code = cot_agents[i]([taskInfo], cot_instruction)
+        possible_answers.extend([thinking, code])
+    
+    # Make a final decision based on all collected reasoning and answers
+    thinking, code = final_decision_agent([taskInfo] + possible_answers, final_decision_instruction)
+    answer = self.get_test_output_from_code(code)
+    
+    return answer
+    """
+}
+
+# Give the LLM a loop and a feedback function it can call, tries again 3 times
+self_reflection = {
+    "thought": "To enhance its performance, an LLM can iteratively improve its answer based on feedback. After each answer, testing on the examples to provide feedback, and the LLM uses insights from previous attempts and feedback to refine its answer. It is very good practice to use `self.run_examples_and_get_feedback` to get feedback. One should consider trying to use this feedback in future agent design.",
+    "name": "Self-Refine (self_reflection)",
+    "code": """def forward(self, taskInfo):
+    # Instruction for initial reasoning and code generation
+    cot_initial_instruction = "Please think step by step and then solve the task by writing the code."
+    
+    # Instruction for reflecting on previous attempts and feedback to improve
+    cot_reflect_instruction = "Given previous attempts and feedback, carefully consider where you went wrong in your latest attempt. Using insights from previous attempts, try to solve the task better."
+    
+    # Instantiate a Chain-of-Thought (CoT) agent
+    cot_agent = LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent')
+    
+    N_max = 3  # Maximum number of attempts
+    
+    # Initial attempt
+    thinking, code = cot_agent([taskInfo], cot_initial_instruction, 0)
+    
+    # Iteratively refine the answer based on feedback
+    for i in range(N_max):
+        # Get feedback by testing the code on examples
+        feedback, correct_examples, wrong_examples = self.run_examples_and_get_feedback(code)  
+        
+        # Add feedback to the inputs for the next iteration
+        attempt = [thinking, code, feedback]
+
+        # Reflect on previous attempts and refine the answer
+        # Only consider the latest attempts to control context length. You can try to increase the N_max.
+        # The input to LLMAgentBase should be a list of Info.
+        thinking, code = cot_agent([taskInfo] + attempt, cot_reflect_instruction, i + 1)  
+
+    # Get the final answer after refinement
+    answer = self.get_test_output_from_code(code)
+    return answer
+    """
+}
+
+# Use the LLM to generate multiple solutionsm, have them debate 2 rounds, then make a final decision
+LLM_debate = {
+    "thought": "By letting different LLMs debate with each other, we can leverage their diverse perspectives to find better solutions for tasks.",
+    "name": "LLM Debate",
+    "code": """def forward(self, taskInfo):
+    # Instruction for initial reasoning and code generation
+    debate_initial_instruction = "Please think step by step and then solve the task by writing the code."
+    
+    # Instruction for debating and updating the solution based on other agents' solutions
+    debate_instruction = "Given solutions to the problem from other agents, consider their opinions as additional advice. Please think carefully and provide an updated answer by writing the code."
+    
+    # Initialize debate agents with different roles and a moderate temperature for varied reasoning
+    debate_agents = [LLMAgentBase(['thinking', 'code'], 'Debate Agent', temperature=0.6, role=role) for role in ['Puzzle Game Designer', 'Expert Logician']]
+
+    # Instruction for final decision-making based on all debates and solutions
+    final_decision_instruction = "Given all the above thinking and answers, reason over them carefully and provide a final answer by writing the code."
+    final_decision_agent = LLMAgentBase(['thinking', 'code'], 'Final Decision Agent', temperature=0.1)
+
+    max_round = 2  # Maximum number of debate rounds
+    all_results = [[] for _ in range(max_round)]
+    
+    # Perform debate rounds
+    for r in range(max_round):
+        for i in range(len(debate_agents)):
+            if r == 0:
+                thinking, code = debate_agents[i]([taskInfo], debate_initial_instruction)
+                answer = self.get_test_output_from_code(code)
+            else:
+                input_infos = [taskInfo] + all_results[r-1]
+                thinking, code = debate_agents[i](input_infos, debate_instruction)
+                answer = self.get_test_output_from_code(code)
+            all_results[r].extend([thinking, answer])
+    
+    # Make the final decision based on all debate results and solutions
+    thinking, code = final_decision_agent([taskInfo] + all_results[max_round-1], final_decision_instruction)
+    answer = self.get_test_output_from_code(code)
+    return answer
+    """
+}
+
+# Have the LLM generate a solution, then another trying to be different from previous, so on so forth 3 times, grab 2 best solutions based on fitness, then let agents debate and pick between them
+Outside_the_box = {
+    "thought": "Similar to Quality-Diversity methods, allowing the LLM to generate multiple diverse and interesting solutions could be beneficial.",
+    "name": "Quality-Diversity",
+    "code": """def forward(self, taskInfo):
+    # Instruction for initial reasoning and code generation
+    cot_initial_instruction = "Please think step by step and then solve the task by writing the code."
+    
+    # Instruction for generating another interesting way to solve the task based on previous attempts
+    cot_QD_instruction = "Given previous attempts, try to come up with another interesting way to solve the task by writing the code."
+    
+    # Initialize the Chain-of-Thought (CoT) agent
+    cot_agent = LLMAgentBase(['thinking', 'code'], 'Chain-of-Thought Agent')
+
+    # Instruction for final decision-making based on all solutions
+    final_decision_instruction = "Given all the above thinking and answers, reason over them carefully and provide a final answer by writing the code."
+    final_decision_agent = LLMAgentBase(['thinking', 'code'], 'Final Decision Agent', temperature=0.1)
+    
+    N_max = 3  # Maximum number of attempts
+    Outside_the_box_inputs = [taskInfo]  # Initialize inputs with the task information
+
+    possible_answers = []
+    
+    # Generate multiple diverse solutions
+    # Different from generating multiple answers through repeated questioning, we generate interestingly new solutions based on previous attempts
+    for i in range(N_max):
+        # Generate a solution based on the instruction (initial or Outside_the_box)
+        # Also control the context length.
+        thinking, code = cot_agent(qd_inputs[-3:], cot_initial_instruction if i == 0 else cot_QD_instruction, i)
+        # Get feedback by testing the code on examples
+        feedback, correct_examples, wrong_examples = self.run_examples_and_get_feedback(code)
+        # Add the solution to inputs for the next iteration
+        Outside_the_box_inputs.extend([thinking, code, feedback])  
+        # Collect all possible answers
+        possible_answers.append({
+            'thinking': thinking,
+            'code': code,
+            'feedback': feedback,
+            'correct_count': len(correct_examples)
+        })
+
+    # Sort the possible answers based on the number of correct examples in descending order
+    sorted_answers = sorted(possible_answers, key=lambda x: x['correct_count'], reverse=True)
+    
+    # Select the top solutions (e.g., top 2 solutions)
+    top_solutions = sorted_answers[:2]
+
+    # Prepare inputs for the final decision agent
+    final_inputs = [taskInfo] + [item for solution in top_solutions for item in [solution['thinking'], solution['code'], solution['feedback']]]
+
+    # Make the final decision based on all solutions
+    thinking, code = final_decision_agent(final_inputs, final_decision_instruction)
+    answer = self.get_test_output_from_code(code)
+    return answer
+    """
+}
+
+default_agents = [COT_code, self_reflection, LLM_debate, COT_split_brain, Outside_the_box]

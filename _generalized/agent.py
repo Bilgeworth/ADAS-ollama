@@ -3,7 +3,7 @@ from collections import namedtuple
 import random
 import string
 
-from data_tools import format_data, eval_solution, calculate_fitness, random_id, list_to_string
+from data_tools import format_data, eval_solution, list_to_string
 from api import api_call_initial, api_call_followup
 
 ######################################################### Agent Setup #########################################################

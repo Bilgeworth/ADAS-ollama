@@ -1,5 +1,6 @@
 import argparse
-from search_and_evaluate import generate_agents, score_agents
+from score_agents import score_agents 
+from generate_agents import generate_agents
 
 # If this file is called directly from the command line, parse the arguments and run the search and evaluate functions
 if __name__ == "__main__":
@@ -9,12 +10,13 @@ if __name__ == "__main__":
 
     parser.add_argument('--model',
                         type=str,
-                        default='llama3.1',
+                        default='gemma2',
                         choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
-    parser.add_argument('--folder', type=str, default='_example')
-    parser.add_argument('--archive_name', type=str, default={parser.folder}+{parser.model}+'_results')
-    parser.add_argument('--data_path', type=str, default={parser.folder}+'data.pkl')
+    parser.add_argument('--folder', type=str, default='_generalized')
+
+    parser.add_argument('--archive_name', type=str)
+    parser.add_argument('--data_path', type=str)
 
     parser.add_argument('--n_generation', type=int, default=25)
     parser.add_argument('--n_repreat', type=int, default=5)
@@ -25,9 +27,17 @@ if __name__ == "__main__":
     parser.add_argument('--multiprocessing', action='store_true', default=True)
     parser.add_argument('--max_workers', type=int, default=32)
 
-    parser.add_argument('--save_dir', type=str, default={parser.folder}+'results/')
+    parser.add_argument('--save_dir', type=str)
 
     cmd_line_args = parser.parse_args()
+
+    # Set the dependent defaults if not provided
+    if not cmd_line_args.archive_name:
+        cmd_line_args.archive_name = f"{cmd_line_args.folder}/{cmd_line_args.model}_results"
+    if not cmd_line_args.data_path:
+        cmd_line_args.data_path = f"{cmd_line_args.folder}/benchmark_data/data.pkl"
+    if not cmd_line_args.save_dir:
+        cmd_line_args.save_dir = f"{cmd_line_args.folder}/results/"
 
     generating_new_agents = False
     
