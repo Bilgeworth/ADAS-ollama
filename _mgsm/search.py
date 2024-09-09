@@ -11,14 +11,14 @@ import numpy as np
 import openai
 from tqdm import tqdm
 
-from mgsm_prompt import get_init_archive, get_prompt, get_reflexion_prompt
+from mgsm_prompt import create_new_archive, get_prompt, get_self_reflection_prompt
 
 client = openai.OpenAI(
     base_url = 'http://localhost:11434/v1',
     api_key='ollama', # required, but unused
 )
 
-from utils import get_all_examples, random_id, bootstrap_confidence_interval, score_mgsm
+from utils import get_all_examples, random_id, calculate_fitness, score_mgsm
 
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
 
@@ -27,7 +27,7 @@ ROLE_DESC = lambda role: f"You are a {role}."
 SYSTEM_MSG = ""
 
 PRINT_LLM_DEBUG = False
-SEARCHING_MODE = True
+generating_new_agents = True
 
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
@@ -54,13 +54,13 @@ def get_json_response_from_gpt(
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
 def get_json_response_from_gpt_reflect(
-        msg_list,
+        chat_log,
         model,
         temperature=0.8
 ):
     response = client.chat.completions.create(
         model=model,
-        messages=msg_list,
+        messages=chat_log,
         temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content
@@ -118,7 +118,7 @@ class LLMAgentBase():
             assert len(response_json) == len(self.output_fields), "not returning enough fields"
         except Exception as e:
             # print(e)
-            if "maximum context length" in str(e) and SEARCHING_MODE:
+            if "maximum context length" in str(e) and generating_new_agents:
                 raise AssertionError("The context is too long. Please try to design the agent to have shorter context.")
             # try to fill in the missing field
             for key in self.output_fields:
@@ -145,8 +145,8 @@ class AgentSystem():
         pass
 
 
-def search(args):
-    file_path = os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")
+def search(cmd_line_args):
+    file_path = os.path.join(cmd_line_args.save_dir, f"{cmd_line_args.archive_name}_run_archive.json")
     if os.path.exists(file_path):
         with open(file_path, 'r') as json_file:
             archive = json.load(json_file)
@@ -155,7 +155,7 @@ def search(args):
         else:
             start = 0
     else:
-        archive = get_init_archive()
+        archive = create_new_archive()
         start = 0
 
     for solution in archive:
@@ -165,77 +165,77 @@ def search(args):
         solution['generation'] = "initial"
         print(f"============Initial Archive: {solution['name']}=================")
         try:
-            acc_list = evaluate_forward_fn(args, solution["code"])
+            score_list = evaluate_forward_fn(cmd_line_args, solution["code"])
         except Exception as e:
             print("During evaluating initial archive:")
             print(e)
             continue
 
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        solution['fitness'] = fitness_str
+        calculated_fitness = calculate_fitness(score_list)
+        solution['fitness'] = calculated_fitness
 
         # save results
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, 'w') as json_file:
             json.dump(archive, json_file, indent=4)
 
-    for n in range(start, args.n_generation):
+    for n in range(start, cmd_line_args.n_generation):
         print(f"============Generation {n + 1}=================")
         system_prompt, prompt = get_prompt(archive)
-        msg_list = [
+        chat_log = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
         try:
-            next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
+            llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
 
-            Reflexion_prompt_1, Reflexion_prompt_2 = get_reflexion_prompt(archive[-1] if n > 0 else None)
-            # Reflexion 1
-            msg_list.append({"role": "assistant", "content": str(next_solution)})
-            msg_list.append({"role": "user", "content": Reflexion_prompt_1})
-            next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
-            # Reflexion 2
-            msg_list.append({"role": "assistant", "content": str(next_solution)})
-            msg_list.append({"role": "user", "content": Reflexion_prompt_2})
-            next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
+            review_and_correct, correct_using_examples = get_self_reflection_prompt(archive[-1] if n > 0 else None)
+            # self_reflection 1
+            chat_log.append({"role": "assistant", "content": str(llm_latest_response)})
+            chat_log.append({"role": "user", "content": review_and_correct})
+            llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
+            # self_reflection 2
+            chat_log.append({"role": "assistant", "content": str(llm_latest_response)})
+            chat_log.append({"role": "user", "content": correct_using_examples})
+            llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
         except Exception as e:
             print("Error while LLM was generating a new solution:")
             print(e)
             n -= 1
             continue
 
-        acc_list = []
-        for _ in range(args.debug_max):
+        score_list = []
+        for _ in range(cmd_line_args.debug_max):
             try:
-                acc_list = evaluate_forward_fn(args, next_solution["code"])
-                if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
+                score_list = evaluate_forward_fn(cmd_line_args, llm_latest_response["code"])
+                if np.mean(score_list) < 0.01 and generating_new_agents:
                     raise Exception("All 0 accuracy")
                 break
             except Exception as e:
                 print("During evaluation:")
                 print(e)
-                msg_list.append({"role": "assistant", "content": str(next_solution)})
-                msg_list.append({"role": "user", "content": f"Error during evaluation:\n{e}\nCarefully consider where you went wrong in your latest implementation. Using insights from previous attempts, try to debug the current code to implement the same thought. Repeat your previous thought in 'thought', and put your thinking for debugging in 'debug_thought'"})
+                chat_log.append({"role": "assistant", "content": str(llm_latest_response)})
+                chat_log.append({"role": "user", "content": f"Error during evaluation:\n{e}\nCarefully consider where you went wrong in your latest implementation. Using insights from previous attempts, try to debug the current code to implement the same thought. Repeat your previous thought in 'thought', and put your thinking for debugging in 'debug_thought'"})
                 try:
-                    next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
+                    llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
                 except Exception as e:
                     print("Error while LLM was generating a new solution:")
                     print(e)
                     continue
                 continue
-        if not acc_list:
+        if not score_list:
             n -= 1
             continue
 
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        next_solution['fitness'] = fitness_str
-        next_solution['generation'] = n + 1
+        calculated_fitness = calculate_fitness(score_list)
+        llm_latest_response['fitness'] = calculated_fitness
+        llm_latest_response['generation'] = n + 1
 
-        if 'debug_thought' in next_solution:
-            del next_solution['debug_thought']
-        if 'reflection' in next_solution:
-            del next_solution['reflection']
-        archive.append(next_solution)
+        if 'debug_thought' in llm_latest_response:
+            del llm_latest_response['debug_thought']
+        if 'reflection' in llm_latest_response:
+            del llm_latest_response['reflection']
+        archive.append(llm_latest_response)
 
         # save results
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -243,9 +243,9 @@ def search(args):
             json.dump(archive, json_file, indent=4)
 
 
-def evaluate(args):
-    file_path = os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")
-    eval_file_path = str(os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")).strip(".json") + "_evaluate.json"
+def evaluate(cmd_line_args):
+    file_path = os.path.join(cmd_line_args.save_dir, f"{cmd_line_args.archive_name}_run_archive.json")
+    eval_file_path = str(os.path.join(cmd_line_args.save_dir, f"{cmd_line_args.archive_name}_run_archive.json")).strip(".json") + "_evaluate.json"
     with open(file_path, 'r') as json_file:
         archive = json.load(json_file)
     eval_archive = []
@@ -264,12 +264,12 @@ def evaluate(args):
         print(f"current_gen: {sol['generation']}, current_idx: {current_idx}")
         current_idx += 1
         try:
-            acc_list = evaluate_forward_fn(args, sol["code"])
+            score_list = evaluate_forward_fn(cmd_line_args, sol["code"])
         except Exception as e:
             print(e)
             continue
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        sol['test_fitness'] = fitness_str
+        calculated_fitness = calculate_fitness(score_list)
+        sol['test_fitness'] = calculated_fitness
         eval_archive.append(sol)
 
         # save results
@@ -278,11 +278,11 @@ def evaluate(args):
             json.dump(eval_archive, json_file, indent=4)
 
 
-def evaluate_forward_fn(args, forward_str):
+def evaluate_forward_fn(cmd_line_args, code_being_judged):
     # dynamically define forward()
     # modified from https://github.com/luchris429/DiscoPOP/blob/main/scripts/launch_evo.py
     namespace = {}
-    exec(forward_str, globals(), namespace)
+    exec(code_being_judged, globals(), namespace)
     names = list(namespace.keys())
     if len(names) != 1:
         raise AssertionError(f"{len(names)} things in namespace. Please only provide 1")
@@ -293,19 +293,19 @@ def evaluate_forward_fn(args, forward_str):
 
     # set seed 0 for valid set
     examples = get_all_examples()
-    random.seed(args.shuffle_seed)
+    random.seed(cmd_line_args.shuffle_seed)
     random.shuffle(examples)
 
-    if SEARCHING_MODE:
-        examples = examples[:args.valid_size] * args.n_repreat
+    if generating_new_agents:
+        examples = examples[:cmd_line_args.valid_size] * cmd_line_args.n_repreat
     else:
-        examples = examples[args.valid_size:args.valid_size + args.test_size] * args.n_repreat
+        examples = examples[cmd_line_args.valid_size:cmd_line_args.valid_size + cmd_line_args.test_size] * cmd_line_args.n_repreat
 
     questions = [example['inputs'] for example in examples]
     answers = [example['targets'] for example in examples]
 
     print(f"problem length: {len(examples)}")
-    max_workers = min(len(examples), args.max_workers) if args.multiprocessing else 1
+    max_workers = min(len(examples), cmd_line_args.max_workers) if cmd_line_args.multiprocessing else 1
 
     task_queue = []
     for q in questions:
@@ -314,25 +314,25 @@ def evaluate_forward_fn(args, forward_str):
 
     agentSystem = AgentSystem()
 
-    acc_list = []
+    score_list = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(tqdm(executor.map(agentSystem.forward, task_queue), total=len(task_queue)))
 
-    for q_idx, res in enumerate(results):
+    for q_idx, function_response in enumerate(results):
         try:
-            if isinstance(res, Info):
-                extracted_answer = res.content
+            if isinstance(function_response, Info):
+                extracted_answer = function_response.content
             else:
-                extracted_answer = res
+                extracted_answer = function_response
             correct_answer = answers[q_idx]
             correct = score_mgsm(correct_answer, extracted_answer)
         except Exception as e:
-            acc_list.append(0)
+            score_list.append(0)
             continue
 
-        acc_list.append(1 if correct else 0)
-    print(f"acc: {bootstrap_confidence_interval(acc_list)}")
-    return acc_list
+        score_list.append(1 if correct else 0)
+    print(f"acc: {calculate_fitness(score_list)}")
+    return score_list
 
 
 if __name__ == "__main__":
@@ -345,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_workers', type=int, default=48)
     parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--save_dir', type=str, default='results/')
-    parser.add_argument('--expr_name', type=str, default="mgsm_llama3.1_results")
+    parser.add_argument('--archive_name', type=str, default="mgsm_llama3.1_results")
     parser.add_argument('--n_generation', type=int, default=30)
     parser.add_argument('--debug_max', type=int, default=3)
     parser.add_argument('--model',
@@ -353,11 +353,11 @@ if __name__ == "__main__":
                         default='llama3.1',
                         choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
-    args = parser.parse_args()
+    cmd_line_args = parser.parse_args()
     # search
-    SEARCHING_MODE = True
-    search(args)
+    generating_new_agents = True
+    search(cmd_line_args)
 
     # evaluate
-    SEARCHING_MODE = False
-    evaluate(args)
+    generating_new_agents = False
+    evaluate(cmd_line_args)

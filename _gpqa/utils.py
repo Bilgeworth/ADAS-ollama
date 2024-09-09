@@ -30,12 +30,12 @@ def load_questions(path: str, seed: int) -> List[Example]:
     return [shuffle_choices_and_create_example(row) for _, row in question_df.iterrows()]
 
 
-def bootstrap_confidence_interval(data, num_bootstrap_samples=100000, confidence_level=0.95):
+def calculate_fitness(data, num_bootstrap_samples=100000, confidence_level=0.95):
     """
     Calculate the bootstrap confidence interval for the mean of 1D accuracy data.
     Also returns the median of the bootstrap means.
     
-    Args:
+    cmd_line_args:
     - data (list or array of float): 1D list or array of data points.
     - num_bootstrap_samples (int): Number of bootstrap samples.
     - confidence_level (float): The desired confidence level (e.g., 0.95 for 95%).

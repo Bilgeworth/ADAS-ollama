@@ -11,14 +11,14 @@ import numpy as np
 import openai
 from tqdm import tqdm
 
-from arc_prompt import get_init_archive, get_prompt, get_reflexion_prompt
+from arc_prompt import create_new_archive, get_prompt, get_self_reflection_prompt
 
 client = openai.OpenAI(
     base_url = 'http://localhost:11434/v1',
     api_key='ollama', # required, but unused
 )
 
-from utils import random_id, format_arc_data, eval_solution, list_to_string, bootstrap_confidence_interval
+from utils import random_id, format_arc_data, eval_solution, list_to_string, calculate_fitness
 
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
 
@@ -28,7 +28,7 @@ SYSTEM_MSG = ""
 CODE_INST = "You will write code to solve this task by creating a function named `transform`. This function should take a single argument, the input grid as `list[list[int]]`, and returns the transformed grid (also as `list[list[int]]`). You should make sure that you implement a version of the transformation that works for both example and test inputs. Make sure that the transform function is capable of handling both example and test inputs effectively, reflecting the learned transformation rules from the Examples inputs and outputs."
 
 PRINT_LLM_DEBUG = False
-SEARCHING_MODE = True
+generating_new_agents = True
 
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
@@ -55,13 +55,13 @@ def get_json_response_from_gpt(
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
 def get_json_response_from_gpt_reflect(
-        msg_list,
+        chat_log,
         model,
         temperature=0.8
 ):
     response = client.chat.completions.create(
         model=model,
-        messages=msg_list,
+        messages=chat_log,
         temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content
@@ -134,7 +134,7 @@ class LLMAgentBase():
             assert len(response_json) == len(self.output_fields), "not returning enough fields"
         except Exception as e:
             # print(e)
-            if "maximum context length" in str(e) and SEARCHING_MODE:
+            if "maximum context length" in str(e) and generating_new_agents:
                 raise AssertionError("The context is too long. Please try to design the agent to have shorter context.")
             # try to fill in the missing field
             for key in self.output_fields:
@@ -237,8 +237,8 @@ class AgentSystem():
         return gen_output(transform_output)
 
 
-def search(args):
-    file_path = os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")
+def search(cmd_line_args):
+    file_path = os.path.join(cmd_line_args.save_dir, f"{cmd_line_args.archive_name}_run_archive.json")
     if os.path.exists(file_path):
         with open(file_path, 'r') as json_file:
             archive = json.load(json_file)
@@ -247,7 +247,7 @@ def search(args):
         else:
             start = 0
     else:
-        archive = get_init_archive()
+        archive = create_new_archive()
         start = 0
 
     for solution in archive:
@@ -257,75 +257,75 @@ def search(args):
         solution['generation'] = "initial"
         print(f"============Initial Archive: {solution['name']}=================")
         try:
-            acc_list = evaluate_forward_fn(args, solution["code"])
+            score_list = evaluate_forward_fn(cmd_line_args, solution["code"])
         except Exception as e:
             print("During evaluating initial archive:")
             print(e)
             continue
 
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        solution['fitness'] = fitness_str
+        calculated_fitness = calculate_fitness(score_list)
+        solution['fitness'] = calculated_fitness
 
         # save results
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, 'w') as json_file:
             json.dump(archive, json_file, indent=4)
 
-    for n in range(start, args.n_generation):
+    for n in range(start, cmd_line_args.n_generation):
         print(f"============Generation {n + 1}=================")
         system_prompt, prompt = get_prompt(archive)
-        msg_list = [
+        chat_log = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
         try:
-            next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
+            llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
 
-            Reflexion_prompt_1, Reflexion_prompt_2 = get_reflexion_prompt(archive[-1] if n > 0 else None)
-            # Reflexion 1
-            msg_list.append({"role": "assistant", "content": str(next_solution)})
-            msg_list.append({"role": "user", "content": Reflexion_prompt_1})
-            next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
-            # Reflexion 2
-            msg_list.append({"role": "assistant", "content": str(next_solution)})
-            msg_list.append({"role": "user", "content": Reflexion_prompt_2})
-            next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
+            review_and_correct, correct_using_examples = get_self_reflection_prompt(archive[-1] if n > 0 else None)
+            # self_reflection 1
+            chat_log.append({"role": "assistant", "content": str(llm_latest_response)})
+            chat_log.append({"role": "user", "content": review_and_correct})
+            llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
+            # self_reflection 2
+            chat_log.append({"role": "assistant", "content": str(llm_latest_response)})
+            chat_log.append({"role": "user", "content": correct_using_examples})
+            llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
         except Exception as e:
             print("Error while LLM was generating a new solution:")
             print(e)
             continue
 
-        acc_list = []
-        for _ in range(args.debug_max):
+        score_list = []
+        for _ in range(cmd_line_args.debug_max):
             try:
-                acc_list = evaluate_forward_fn(args, next_solution["code"])
-                if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
+                score_list = evaluate_forward_fn(cmd_line_args, llm_latest_response["code"])
+                if np.mean(score_list) < 0.01 and generating_new_agents:
                     raise Exception("All 0 accuracy")
                 break
             except Exception as e:
                 print("During evaluation:")
                 print(e)
-                msg_list.append({"role": "assistant", "content": str(next_solution)})
-                msg_list.append({"role": "user", "content": f"Error during evaluation:\n{e}\nCarefully consider where you went wrong in your latest implementation. Using insights from previous attempts, try to debug the current code to implement the same thought. Repeat your previous thought in 'thought', and put your thinking for debugging in 'debug_thought'"})
+                chat_log.append({"role": "assistant", "content": str(llm_latest_response)})
+                chat_log.append({"role": "user", "content": f"Error during evaluation:\n{e}\nCarefully consider where you went wrong in your latest implementation. Using insights from previous attempts, try to debug the current code to implement the same thought. Repeat your previous thought in 'thought', and put your thinking for debugging in 'debug_thought'"})
                 try:
-                    next_solution = get_json_response_from_gpt_reflect(msg_list, args.model)
+                    llm_latest_response = get_json_response_from_gpt_reflect(chat_log, cmd_line_args.model)
                 except Exception as e:
                     print("Error while LLM was generating a new solution:")
                     print(e)
                     continue
                 continue
-        if not acc_list:
+        if not score_list:
             continue
 
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        next_solution['fitness'] = fitness_str
-        next_solution['generation'] = n + 1
+        calculated_fitness = calculate_fitness(score_list)
+        llm_latest_response['fitness'] = calculated_fitness
+        llm_latest_response['generation'] = n + 1
 
-        if 'debug_thought' in next_solution:
-            del next_solution['debug_thought']
-        if 'reflection' in next_solution:
-            del next_solution['reflection']
-        archive.append(next_solution)
+        if 'debug_thought' in llm_latest_response:
+            del llm_latest_response['debug_thought']
+        if 'reflection' in llm_latest_response:
+            del llm_latest_response['reflection']
+        archive.append(llm_latest_response)
 
         # save results
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -333,9 +333,9 @@ def search(args):
             json.dump(archive, json_file, indent=4)
 
 
-def evaluate(args):
-    file_path = os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")
-    eval_file_path = str(os.path.join(args.save_dir, f"{args.expr_name}_run_archive.json")).strip(".json") + "_evaluate.json"
+def evaluate(cmd_line_args):
+    file_path = os.path.join(cmd_line_args.save_dir, f"{cmd_line_args.archive_name}_run_archive.json")
+    eval_file_path = str(os.path.join(cmd_line_args.save_dir, f"{cmd_line_args.archive_name}_run_archive.json")).strip(".json") + "_evaluate.json"
     with open(file_path, 'r') as json_file:
         archive = json.load(json_file)
     eval_archive = []
@@ -353,12 +353,12 @@ def evaluate(args):
         sol = archive[current_idx]
         print(f"current_gen: {sol['generation']}, current_idx: {current_idx}")
         try:
-            acc_list = evaluate_forward_fn(args, sol["code"])
+            score_list = evaluate_forward_fn(cmd_line_args, sol["code"])
         except Exception as e:
             print(e)
             continue
-        fitness_str = bootstrap_confidence_interval(acc_list)
-        sol['test_fitness'] = fitness_str
+        calculated_fitness = calculate_fitness(score_list)
+        sol['test_fitness'] = calculated_fitness
         eval_archive.append(sol)
 
         # save results
@@ -369,11 +369,11 @@ def evaluate(args):
         current_idx += 1
 
 
-def evaluate_forward_fn(args, forward_str):
+def evaluate_forward_fn(cmd_line_args, code_being_judged):
     # dynamically define forward()
     # modified from https://github.com/luchris429/DiscoPOP/blob/main/scripts/launch_evo.py
     namespace = {}
-    exec(forward_str, globals(), namespace)
+    exec(code_being_judged, globals(), namespace)
     names = list(namespace.keys())
     if len(names) != 1:
         raise AssertionError(f"{len(names)} things in namespace. Please only provide 1")
@@ -382,43 +382,43 @@ def evaluate_forward_fn(args, forward_str):
         raise AssertionError(f"{func} is not callable")
     setattr(AgentSystem, "forward", func)
 
-    if SEARCHING_MODE:
-        arc_dir = args.val_data_path
+    if generating_new_agents:
+        arc_dir = cmd_line_args.val_data_path
     else:
-        arc_dir = args.test_data_path
+        arc_dir = cmd_line_args.test_data_path
     print(arc_dir)
     with open(arc_dir, 'rb') as pickle_file:
         arc_data_queue = pickle.load(pickle_file)
 
-    print(f"problem length: {len(arc_data_queue) * args.n_repreat}")
-    max_workers = min(len(arc_data_queue) * args.n_repreat, args.max_workers) if args.multiprocessing else 1
+    print(f"problem length: {len(arc_data_queue) * cmd_line_args.n_repreat}")
+    max_workers = min(len(arc_data_queue) * cmd_line_args.n_repreat, cmd_line_args.max_workers) if cmd_line_args.multiprocessing else 1
 
     agent_task_queue = []
     for arc_data in arc_data_queue:
         task_str, examples, test_input = format_arc_data(arc_data)
         taskInfo = Info('task', 'User', task_str, -1)
-        agent_task_queue.extend([(AgentSystem(examples, test_input), taskInfo, arc_data)] * args.n_repreat)
+        agent_task_queue.extend([(AgentSystem(examples, test_input), taskInfo, arc_data)] * cmd_line_args.n_repreat)
 
-    def call_forward(agent_task_queue):
+    def run_function(agent_task_queue):
         agent, taskInfo, arc_data = agent_task_queue
-        res = agent.forward(taskInfo)
-        origin_res = res
+        function_response = agent.forward(taskInfo)
+        origin_res = function_response
         try:
-            if isinstance(res, Info):
-                res = res.content
-            if isinstance(res, str):
-                res = eval(res)
-            hard_score = eval_solution(res, arc_data, soft_eval=False)
+            if isinstance(function_response, Info):
+                function_response = function_response.content
+            if isinstance(function_response, str):
+                function_response = eval(function_response)
+            hard_score = eval_solution(function_response, arc_data, soft_eval=False)
             return hard_score
         except Exception as e:
             # print(e)
             return 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        acc_list = list(tqdm(executor.map(call_forward, agent_task_queue), total=len(agent_task_queue)))
+        score_list = list(tqdm(executor.map(run_function, agent_task_queue), total=len(agent_task_queue)))
 
-    print("acc:", bootstrap_confidence_interval(acc_list))
-    return acc_list
+    print("acc:", calculate_fitness(score_list))
+    return score_list
 
 
 if __name__ == "__main__":
@@ -430,7 +430,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_workers', type=int, default=32)
     parser.add_argument('--debug', action='store_true', default=True)
     parser.add_argument('--save_dir', type=str, default='results/')
-    parser.add_argument('--expr_name', type=str, default='arc_llama3.1_results')
+    parser.add_argument('--archive_name', type=str, default='arc_llama3.1_results')
     parser.add_argument('--n_generation', type=int, default=25)
     parser.add_argument('--reflect_max', type=int, default=3)
     parser.add_argument('--debug_max', type=int, default=3)
@@ -439,11 +439,11 @@ if __name__ == "__main__":
                         default='llama3.1',
                         choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
-    args = parser.parse_args()
+    cmd_line_args = parser.parse_args()
     # search
-    SEARCHING_MODE = True
-    search(args)
+    generating_new_agents = True
+    search(cmd_line_args)
 
     # evaluate
-    SEARCHING_MODE = False
-    evaluate(args)
+    generating_new_agents = False
+    evaluate(cmd_line_args)

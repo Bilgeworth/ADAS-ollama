@@ -18,7 +18,7 @@ client = openai.OpenAI(
     api_key='ollama', # required, but unused
 )
 
-from DROP_utils import random_id, bootstrap_confidence_interval, load_drop, drop_metric
+from DROP_utils import random_id, calculate_fitness, load_drop, drop_metric
 Info = namedtuple('Info', ['name', 'author', 'content', 'iteration_idx'])
 
 FORMAT_INST = lambda request_keys: f"""Reply EXACTLY with the following JSON format.\n{str(request_keys)}\nDO NOT MISS ANY REQUEST FIELDS and ensure that your response is a well-formed JSON object!\n"""
@@ -26,7 +26,7 @@ ROLE_DESC = lambda role: f"You are a {role}."
 SYSTEM_MSG = ""
 
 PRINT_LLM_DEBUG = False
-SEARCHING_MODE = True
+generating_new_agents = True
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
 def get_json_response_from_gpt(
@@ -51,13 +51,13 @@ def get_json_response_from_gpt(
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
 def get_json_response_from_gpt_reflect(
-        msg_list,
+        chat_log,
         model,
         temperature=0.8
 ):
     response = client.chat.completions.create(
         model=model,
-        messages=msg_list,
+        messages=chat_log,
         temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
     )
     content = response.choices[0].message.content
@@ -114,7 +114,7 @@ class LLMAgentBase():
             assert len(response_json) == len(self.output_fields), "not returning enough fields"
         except Exception as e:
             # print(e)
-            if "maximum context length" in str(e) and SEARCHING_MODE:
+            if "maximum context length" in str(e) and generating_new_agents:
                 raise AssertionError("The context is too long. Please try to design the agent to have shorter context.")
             #try to fill in the missing field
             for key in self.output_fields:
@@ -139,8 +139,8 @@ class AgentSystem():
     def __init__(self) -> None:
         pass
 
-def evaluate(args):
-    eval_file_path = args.eval_file_path
+def evaluate(cmd_line_args):
+    eval_file_path = cmd_line_args.eval_file_path
     if os.path.exists(eval_file_path):
         with open(eval_file_path, 'r') as json_file:
             test_entries = json.load(json_file)
@@ -149,19 +149,19 @@ def evaluate(args):
 
     for sol in test_entries:
         print(f"{sol['name']}")
-        acc_list = evaluate_forward_fn(args, sol['code'])
-        sol['test_fitness_DROP'] = bootstrap_confidence_interval(acc_list)
+        score_list = evaluate_forward_fn(cmd_line_args, sol['code'])
+        sol['test_fitness_DROP'] = calculate_fitness(score_list)
 
     # Step 5: Save the test entries
     with open(eval_file_path, 'w') as json_file:
         json.dump(test_entries, json_file, indent=4)
 
 
-def evaluate_forward_fn(args, forward_str):
+def evaluate_forward_fn(cmd_line_args, code_being_judged):
     # dynamically define forward()
     # modified from https://github.com/luchris429/DiscoPOP/blob/main/scripts/launch_evo.py
     namespace = {}
-    exec(forward_str, globals(), namespace)
+    exec(code_being_judged, globals(), namespace)
     names = list(namespace.keys())
     if len(names) != 1:
         raise AssertionError(f"{len(names)} things in namespace. Please only provide 1")
@@ -171,20 +171,20 @@ def evaluate_forward_fn(args, forward_str):
     setattr(AgentSystem, "forward", func)
 
     # set seed 0 for valid set
-    examples = load_drop(args.data_filename)[1:-1] # first one and the last one is for few-shot examples
-    random.seed(args.shuffle_seed)
+    examples = load_drop(cmd_line_args.data_filename)[1:-1] # first one and the last one is for few-shot examples
+    random.seed(cmd_line_args.shuffle_seed)
     random.shuffle(examples)
 
-    if SEARCHING_MODE:
-        examples = examples[:args.valid_size] * args.n_repreat
+    if generating_new_agents:
+        examples = examples[:cmd_line_args.valid_size] * cmd_line_args.n_repreat
     else:
-        examples = examples[args.valid_size:args.valid_size+args.test_size] * args.n_repreat
+        examples = examples[cmd_line_args.valid_size:cmd_line_args.valid_size+cmd_line_args.test_size] * cmd_line_args.n_repreat
 
     questions = [example['inputs'] for example in examples]
     answers = [example['targets'] for example in examples]
 
     print(f"problem length: {len(examples)}")
-    max_workers = min(len(examples), args.max_workers) if args.multiprocessing else 1
+    max_workers = min(len(examples), cmd_line_args.max_workers) if cmd_line_args.multiprocessing else 1
 
     task_queue = []
     for q in questions:
@@ -194,25 +194,25 @@ def evaluate_forward_fn(args, forward_str):
 
     agentSystem = AgentSystem()
 
-    acc_list = []
+    score_list = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(tqdm(executor.map(agentSystem.forward, task_queue), total=len(task_queue)))
 
-    for q_idx, res in enumerate(results):
+    for q_idx, function_response in enumerate(results):
         try:
-            if isinstance(res, Info):
-                extracted_answer = res.content
+            if isinstance(function_response, Info):
+                extracted_answer = function_response.content
             else:
-                extracted_answer = res
+                extracted_answer = function_response
             correct_answers = answers[q_idx]
             em_score, f1_score = drop_metric(extracted_answer, correct_answers)
         except Exception as e:
-            acc_list.append(0)
+            score_list.append(0)
             continue
 
-        acc_list.append(f1_score)
-    print(f"acc: {bootstrap_confidence_interval(acc_list)}")
-    return acc_list
+        score_list.append(f1_score)
+    print(f"acc: {calculate_fitness(score_list)}")
+    return score_list
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -230,8 +230,8 @@ if __name__ == "__main__":
                         default='llama3.1',
                         choices=['mistral-nemo', 'gemma2', 'llama3.1'])
 
-    args = parser.parse_args()
+    cmd_line_args = parser.parse_args()
 
-    SEARCHING_MODE = False
-    evaluate(args)
+    generating_new_agents = False
+    evaluate(cmd_line_args)
 
