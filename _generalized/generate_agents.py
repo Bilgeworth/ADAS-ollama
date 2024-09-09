@@ -49,9 +49,7 @@ def generate_agents(cmd_line_args):
             
             # Try to get three responses from the LLM, the first has it attempt a solution, the second has it list mistakes, third attempts to fix mistakes
             try:
-                print("Sending API call with chat log:", chat_log)
-                llm_latest_response = api_call_followup(chat_log, cmd_line_args.model)             
-                print("Received response:", llm_latest_response)
+                llm_latest_response = api_call_followup(chat_log, cmd_line_args.model)        
 
                 review_and_correct, correct_using_examples = get_self_reflection_prompt(archive[-1] if generation_index > 0 else None)
                 # self_reflection 1 "Where did we go wrong?"

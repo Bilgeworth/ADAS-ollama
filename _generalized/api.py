@@ -17,6 +17,7 @@ def api_call_initial(
         system_message,
         temperature=0.5
 ):
+    print("Sending API call:", "system message:", system_message, "user message:", msg)
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -25,6 +26,7 @@ def api_call_initial(
         ],
         temperature=temperature, max_tokens=1024, stop=None, response_format={"type": "json_object"}
     )
+    print("Recieved response:", response.choices[0].message.content)
     content = response.choices[0].message.content
     json_dict = json.loads(content)
     assert not json_dict is None
@@ -37,11 +39,14 @@ def api_call_followup(
         model,
         temperature=0.8
 ):
+         
+    print("Sending API call:", chat_log)
     response = client.chat.completions.create(
         model=model,
         messages=chat_log,
         temperature=temperature, max_tokens=4096, stop=None, response_format={"type": "json_object"}
     )
+    print("Recieved response:", response.choices[0].message.content)
     content = response.choices[0].message.content
     json_dict = json.loads(content)
     assert not json_dict is None
